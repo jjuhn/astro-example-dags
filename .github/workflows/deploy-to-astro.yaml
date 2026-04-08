@@ -30,4 +30,4 @@ jobs:
       uses: astronomer/deploy-action@v0.4
       with:
         deployment-id: ${{ env.DEPLOYMENT_ID }}
-        workspace-id: ${{ env.WORKSPACE_ID }}
+        workspace: ${{ env.WORKSPACE_ID }}
