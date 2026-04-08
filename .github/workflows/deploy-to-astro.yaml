@@ -11,15 +11,23 @@ on:
         description: "Astro API Token"
         required: true
         type: string
+      workspaceId: # Add this block
+        description: "Workspace ID"
+        required: true
+        type: string
   push:
     branches:
       - main
 env:
   ASTRO_API_TOKEN: ${{ inputs.apiToken || secrets.ASTRO_API_TOKEN }}
   DEPLOYMENT_ID: ${{ inputs.deploymentId || vars.DEPLOYMENT_ID }}
+  WORKSPACE_ID: ${{ inputs.workspaceId || vars.WORKSPACE_ID }}
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
     - name: Deploy to Astro
       uses: astronomer/deploy-action@v0.3
+      with:
+        deployment-id: ${{ env.DEPLOYMENT_ID }}
+        workspace-id: ${{ env.WORKSPACE_ID }}
