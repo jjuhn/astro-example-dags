@@ -11,19 +11,12 @@ on:
         description: "Astro API Token"
         required: true
         type: string
-      workspaceId:
-        description: "Workspace ID"
-        required: true
-        type: string
   push:
     branches:
       - main
-
 env:
   ASTRO_API_TOKEN: ${{ inputs.apiToken || secrets.ASTRO_API_TOKEN }}
   DEPLOYMENT_ID: ${{ inputs.deploymentId || vars.DEPLOYMENT_ID }}
-  WORKSPACE_ID: ${{ inputs.workspaceId || vars.WORKSPACE_ID }}
-
 jobs:
   build:
     runs-on: ubuntu-latest
