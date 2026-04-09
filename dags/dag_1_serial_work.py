@@ -1,163 +1,87 @@
-"""
-DAG 1 — Serial Order ETL
-========================
-4 tasks that are strictly serially dependent.
-Simulates extracting orders from an API, validating the schema,
-transforming the data, and loading it into Amazon Redshift.
-
-External connection: Redshift (connection id = 'redshift_default')
-"""
-
 from __future__ import annotations
 
+import os
 import json
 import logging
-import random
 from datetime import datetime, timedelta
 
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.models import Variable
 
 log = logging.getLogger(__name__)
 
-# Updated to Redshift connection ID
-REDSHIFT_CONN_ID = "redshift_default"
+# --- 1. DYNAMIC PATH DISCOVERY ---
+# This eliminates the /usr/local/airflow hardcoding
+DAG_DIR = os.path.dirname(os.path.abspath(__file__))
+SQL_DIR = os.path.join(DAG_DIR, 'sqls')
 
-DEFAULT_ARGS = {
-    "owner": "some e commerce data team",
-    "retries": 3,
-    "retry_delay": timedelta(minutes=2),
-    "email_on_failure": False,
-}
-
+# --- 2. CONFIGURATION ---
+REDSHIFT_CONN = Variable.get("redshift_conn", default_var="redshift_default")
+TARGET_TABLE = "public.raw_orders"
 
 @dag(
     dag_id="dag1_serial_order_etl_redshift",
-    description="Serial pipeline: extract → validate → transform → load to Redshift",
-    schedule=None,
+    schedule="@daily",
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    default_args=DEFAULT_ARGS,
-    tags=["ecommerce", "etl", "redshift", "serial"],
+    # 3. Use the dynamic path here
+    template_searchpath=[SQL_DIR],
+    tags=["redshift"]
 )
-def serial_order_etl():
-    """
-    ### Serial Order ETL Pipeline
+def production_serial_etl():
 
-    Extracts raw orders from a simulated API, validates the schema,
-    applies business transformations, and loads the results into Redshift.
-    """
-
-    @task()
-    def extract_orders() -> list[dict]:
-        log.info("Extracting orders from e-commerce API...")
-        statuses = ["pending", "confirmed", "shipped", "delivered", "cancelled"]
-        raw_orders = [
-            {
-                "order_id": f"ORD-{1000 + i}",
-                "customer_id": f"CUST-{random.randint(100, 999)}",
-                "product_sku": random.choice(["SKU-A", "SKU-B", "SKU-C", "SKU-D"]),
-                "quantity": random.randint(1, 10),
-                "unit_price": round(random.uniform(9.99, 299.99), 2),
-                "status": random.choice(statuses),
-                "created_at": datetime.utcnow().isoformat(),
-                "country_code": random.choice(["US", "CA", "GB", "DE", "AU"]),
-            }
-            for i in range(20)
+    @task
+    def extract_orders():
+        """Simulates an API call to an e-commerce backend."""
+        return [
+            {"order_id": "ORD-101", "customer_id": "CUST-01", "product_sku": "SKU-A", "quantity": 2, "unit_price": 50.0, "status": "shipped", "created_at": "2026-04-09"},
+            {"order_id": "ORD-102", "customer_id": "CUST-02", "product_sku": "SKU-B", "quantity": 1, "unit_price": 120.0, "status": "pending", "created_at": "2026-04-09"}
         ]
-        log.info("Extracted %d orders.", len(raw_orders))
-        return raw_orders
 
-    @task()
-    def validate_schema(orders: list[dict]) -> list[dict]:
-        required_fields = {
-            "order_id", "customer_id", "product_sku",
-            "quantity", "unit_price", "status", "created_at",
-        }
-        valid_orders = []
-        dropped = 0
+    @task
+    def validate_schema(orders: list):
+        """Validates data quality before transformation."""
+        required_fields = ["order_id", "quantity", "unit_price"]
+        valid_orders = [o for o in orders if all(k in o for k in required_fields) and o['quantity'] > 0]
 
-        for order in orders:
-            missing = required_fields - order.keys()
-            if missing:
-                log.warning("Order %s missing fields: %s — dropping.", order.get("order_id"), missing)
-                dropped += 1
-                continue
-            if order["quantity"] <= 0 or order["unit_price"] <= 0:
-                log.warning("Order %s has invalid quantity/price — dropping.", order["order_id"])
-                dropped += 1
-                continue
-            valid_orders.append(order)
-
-        log.info("Validation complete. Valid: %d | Dropped: %d", len(valid_orders), dropped)
+        if not valid_orders:
+            raise ValueError("No valid orders found in batch!")
         return valid_orders
 
-    @task()
-    def transform_orders(orders: list[dict]) -> list[dict]:
-        transformed = []
+    @task
+    def transform_orders(orders: list):
+        """Applies business logic (Line Total & Masking)."""
         for order in orders:
-            transformed.append(
-                {
-                    **order,
-                    "line_total": round(order["quantity"] * order["unit_price"], 2),
-                    "country_code": order.get("country_code", "XX").upper(),
-                    "customer_id_masked": "***" + order["customer_id"][-3:],
-                    "ingested_at": datetime.utcnow().isoformat(),
-                    "status_category": (
-                        "active" if order["status"] in ("pending", "confirmed", "shipped")
-                        else "terminal"
-                    ),
-                }
-            )
-        return transformed
+            order["line_total"] = round(order["quantity"] * order["unit_price"], 2)
+            order["customer_id"] = f"***{order['customer_id'][-2:]}"
+        return orders
 
-    @task()
-    def load_to_redshift(orders: list[dict]) -> None:
+    @task
+    def load_to_redshift(orders: list, **context):
         """
-        Load transformed orders into Redshift.
-        Uses PostgresHook (standard for Redshift).
-        Target table: public.raw_orders
+        TASK: Load
+        Renders the upsert SQL from the /sqls folder and logs it.
         """
-        # Redshift uses the PostgresHook
-        hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
+        # 4. Use the DAG's environment to find the template
+        jinja_env = context['dag'].get_template_env()
+        template = jinja_env.get_template("upsert_orders.sql")
 
-        log.info(
-            "Connected to Redshift. Loading %d records into public.raw_orders...",
-            len(orders),
+        rendered_sql = template.render(
+            target_table=TARGET_TABLE,
+            orders=orders,
+            **context
         )
 
-        for order in orders[:3]:
-            log.info("Sample row: %s", json.dumps(order))
+        log.info("--- PREVIEW: RENDERED UPSERT SQL ---")
+        log.info(rendered_sql)
+        log.info("--- END PREVIEW ---")
 
-        # Redshift Upsert Strategy:
-        # 1. Insert into temp table
-        # 2. Delete matching records from target
-        # 3. Insert from temp to target
-        sample_sql = """
-        BEGIN;
-        CREATE TEMP TABLE stage_orders (LIKE public.raw_orders);
+        # hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN)
+        # hook.run(rendered_sql)
 
-        -- (In reality, you would use 'copy' or 'insert' to fill the temp table)
+    # Dependencies
+    processed_orders = transform_orders(validate_schema(extract_orders()))
+    load_to_redshift(processed_orders)
 
-        DELETE FROM public.raw_orders 
-        USING stage_orders 
-        WHERE public.raw_orders.order_id = stage_orders.order_id;
-
-        INSERT INTO public.raw_orders SELECT * FROM stage_orders;
-        COMMIT;
-        """
-        log.info("Typical Redshift Upsert Pattern:\n%s", sample_sql)
-
-        # To execute for real:
-        # hook.run(list_of_sql_strings)
-
-        log.info("Load complete. %d rows processed.", len(orders))
-
-    # ── Wire up the serial chain ──────────────────────────────────────────────
-    raw = extract_orders()
-    validated = validate_schema(raw)
-    transformed = transform_orders(validated)
-    load_to_redshift(transformed)
-
-
-serial_order_etl()
+production_serial_etl()
