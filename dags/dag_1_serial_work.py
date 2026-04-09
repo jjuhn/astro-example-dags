@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from airflow.sdk import dag, task, Asset
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.models import Variable
-from assets import ENRICHED_ORDERS, PROCESSED_ORDERS
+from assets.constants import ENRICHED_ORDERS, PROCESSED_ORDERS
 
 log = logging.getLogger(__name__)
 

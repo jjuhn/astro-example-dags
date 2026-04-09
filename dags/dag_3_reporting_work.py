@@ -13,7 +13,7 @@ from airflow.timetables.assets import AssetOrTimeSchedule
 from airflow.timetables.trigger import CronTriggerTimetable
 
 # Import the asset from your central assets file
-from assets import SCORED_ORDERS
+from assets.constants import SCORED_ORDERS
 
 log = logging.getLogger(__name__)
 

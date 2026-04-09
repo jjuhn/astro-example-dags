@@ -5,7 +5,7 @@ import random
 from datetime import datetime, timedelta
 
 from airflow.sdk import dag, task, TaskGroup, Asset
-from assets import ENRICHED_ORDERS
+from assets.constants import ENRICHED_ORDERS
 
 
 log = logging.getLogger(__name__)
