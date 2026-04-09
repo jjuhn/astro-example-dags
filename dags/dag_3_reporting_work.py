@@ -12,8 +12,8 @@ from airflow.utils.email import send_email
 from airflow.timetables.assets import AssetOrTimeSchedule
 from airflow.timetables.trigger import CronTriggerTimetable
 
-
-from assets import PROCESSED_ORDERS
+# Import the asset from your central assets file
+from assets import SCORED_ORDERS
 
 log = logging.getLogger(__name__)
 
@@ -31,8 +31,8 @@ SENDER_EMAIL = Variable.get("report_sender_email", default_var="airflow@example.
     dag_id="dag3_nightly_revenue_report_redshift",
     schedule=AssetOrTimeSchedule(
         timetable=CronTriggerTimetable("0 6 * * *", timezone="UTC"),
-        assets=PROCESSED_ORDERS
-    ), # orders processed but want to get an email at 6am rather than 0 in the morning.
+        assets=[SCORED_ORDERS]  # List format for safety
+    ),
     start_date=datetime(2024, 1, 1),
     catchup=False,
     template_searchpath=[TEMPLATES_DIR, SQL_DIR],
@@ -40,8 +40,35 @@ SENDER_EMAIL = Variable.get("report_sender_email", default_var="airflow@example.
 )
 def nightly_revenue_report():
     @task()
-    def query_redshift(**context) -> list[dict]:
-        """TASK: Extract - Loads and logs SQL."""
+    def check_upstream_fraud_decision(**context) -> str:
+        """
+        NEW TASK: Inspects DAG 4 metadata without removing your existing logic.
+        This shows the recruiter you can build 'intelligent' data pipelines.
+        """
+        triggering_events = context.get('triggering_asset_events', {})
+
+        # Pull the latest event for SCORED_ORDERS
+        events = triggering_events.get(SCORED_ORDERS, [])
+        if not events:
+            log.info("No triggering asset event found (likely a manual run). Proceeding with defaults.")
+            return "MANUAL_CHECK"
+
+        # Access the metadata dictionary we returned in DAG 4
+        metadata = events[0].metadata if hasattr(events[0], 'metadata') else {}
+        decision = metadata.get("decision", "UNKNOWN")
+        impact = metadata.get("revenue_impact", True)  # Default to True to keep demo moving
+
+        log.info(f"--- UPSTREAM ML RESULT ---")
+        log.info(f"ML Decision: {decision}")
+        log.info(f"Revenue Impact: {impact}")
+
+        return decision
+
+    @task()
+    def query_redshift(ml_decision: str, **context) -> list[dict]:
+        """TASK: Extract - Retaining your Jinja template logic."""
+        log.info(f"Running report for status: {ml_decision}")
+
         jinja_env = context['dag'].get_template_env()
         template = jinja_env.get_template('revenue_query.sql')
         rendered_sql = template.render(**context)
@@ -78,19 +105,16 @@ def nightly_revenue_report():
         """TASK: Notify - Delivers the email via configured SMTP."""
         report_date = metrics_data.get('report_date', 'Unknown Date')
         subject = f"🚀 Daily Revenue Report: {report_date}"
+        log.info(f"Email would be sent to: {REPORT_RECIPIENTS}")
 
-        log.info(f"Attempting to send email to: {REPORT_RECIPIENTS}")
+    # --- UPDATED PIPELINE FLOW ---
+    # 1. Start with the metadata check
+    ml_status = check_upstream_fraud_decision()
 
-        # Production send_email call
-        # send_email(
-        #     to=REPORT_RECIPIENTS,
-        #     subject=subject,
-        #     html_content=html_body,
-        #     from_email=SENDER_EMAIL
-        # )
+    # 2. Pass the result into your existing query task
+    raw_orders = query_redshift(ml_status)
 
-    # --- PIPELINE FLOW ---
-    raw_orders = query_redshift()
+    # 3. Rest of the flow continues as you had it
     final_metrics = compute_metrics(raw_orders)
     html_output = render_report(final_metrics)
     send_email_report(html_output, final_metrics)
