@@ -9,6 +9,11 @@ from airflow.sdk import dag, task
 from airflow.models import Variable
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.utils.email import send_email
+from airflow.timetables.assets import AssetOrTimeSchedule
+from airflow.timetables.trigger import CronTriggerTimetable
+
+
+from assets import PROCESSED_ORDERS
 
 log = logging.getLogger(__name__)
 
@@ -24,11 +29,14 @@ SENDER_EMAIL = Variable.get("report_sender_email", default_var="airflow@example.
 
 @dag(
     dag_id="dag3_nightly_revenue_report_redshift",
-    schedule="0 6 * * *",
+    schedule=AssetOrTimeSchedule(
+        timetable=CronTriggerTimetable("0 6 * * *", timezone="UTC"),
+        assets=PROCESSED_ORDERS
+    ), # orders processed but want to get an email at 6am rather than 0 in the morning.
     start_date=datetime(2024, 1, 1),
     catchup=False,
     template_searchpath=[TEMPLATES_DIR, SQL_DIR],
-    tags=["ecommerce", "redshift", "v3", "production"],
+    tags=["serial", "email"],
 )
 def nightly_revenue_report():
     @task()

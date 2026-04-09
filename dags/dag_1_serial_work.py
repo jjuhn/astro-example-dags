@@ -5,9 +5,10 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from airflow.sdk import dag, task
+from airflow.sdk import dag, task, Asset
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.models import Variable
+from assets import ENRICHED_ORDERS, PROCESSED_ORDERS
 
 log = logging.getLogger(__name__)
 
@@ -20,14 +21,15 @@ SQL_DIR = os.path.join(DAG_DIR, 'sqls')
 REDSHIFT_CONN = Variable.get("redshift_conn", default_var="redshift_default")
 TARGET_TABLE = "public.raw_orders"
 
+
 @dag(
     dag_id="dag1_serial_order_etl_redshift",
-    schedule="@daily",
+    schedule=[ENRICHED_ORDERS],
     start_date=datetime(2024, 1, 1),
     catchup=False,
     # 3. Use the dynamic path here
     template_searchpath=[SQL_DIR],
-    tags=["redshift"]
+    tags=["serial"]
 )
 def production_serial_etl():
 
@@ -57,7 +59,7 @@ def production_serial_etl():
             order["customer_id"] = f"***{order['customer_id'][-2:]}"
         return orders
 
-    @task
+    @task(outlets=[PROCESSED_ORDERS])
     def load_to_redshift(orders: list, **context):
         """
         TASK: Load
