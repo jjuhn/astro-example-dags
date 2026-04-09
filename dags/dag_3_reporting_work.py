@@ -1,156 +1,91 @@
 from __future__ import annotations
 
-import json
+import os
 import logging
 import random
 from datetime import datetime, timedelta
 
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
+from airflow.models import Variable
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.utils.email import send_email
 
 log = logging.getLogger(__name__)
 
-# 2. Update Connection ID
-REDSHIFT_CONN_ID = "redshift_default"
+DAG_DIR = os.path.dirname(os.path.abspath(__file__))
+SQL_DIR = os.path.join(DAG_DIR, 'sqls')
+TEMPLATES_DIR = os.path.join(DAG_DIR, 'templates')
 
-DEFAULT_ARGS = {
-    "owner": "data-engineering",
-    "retries": 2,
-    "retry_delay": timedelta(minutes=5),
-    "email_on_failure": True,
-    "email": ["data-team@example.com"],
-    "sla": timedelta(minutes=20),
-}
+# Fetch from Admin -> Variables
+REPORT_RECIPIENTS = Variable.get("revenue_report_emails", default_var="jjuhn1119@gmail.com").split(",")
+REDSHIFT_CONN_ID = Variable.get("redshift_conn_id", default_var="redshift_default")
+SENDER_EMAIL = Variable.get("report_sender_email", default_var="airflow@example.com")
 
 
 @dag(
     dag_id="dag3_nightly_revenue_report_redshift",
-    description="Daily revenue KPI report — runs at 6 AM UTC, queries Redshift, sends email",
     schedule="0 6 * * *",
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    default_args=DEFAULT_ARGS,
-    tags=["ecommerce", "reporting", "scheduled", "redshift"], # Updated tag
+    template_searchpath=[TEMPLATES_DIR, SQL_DIR],
+    tags=["ecommerce", "redshift", "v3", "production"],
 )
 def nightly_revenue_report():
-    """
-    ### Nightly Revenue Report DAG (Redshift)
-    Pulls yesterday's order data from Redshift, computes revenue KPIs,
-    renders an HTML report, and delivers it via email.
-    """
-
     @task()
-    def query_redshift(**context) -> list[dict]: # Renamed for clarity
-        """
-        Query Redshift for all orders from the previous calendar day.
-        """
-        logical_date = context["data_interval_start"]
-        report_date = logical_date.strftime("%Y-%m-%d")
+    def query_redshift(**context) -> list[dict]:
+        """TASK: Extract - Loads and logs SQL."""
+        jinja_env = context['dag'].get_template_env()
+        template = jinja_env.get_template('revenue_query.sql')
+        rendered_sql = template.render(**context)
 
-        log.info("Querying Redshift for orders on %s...", report_date)
-
-        # 3. Use PostgresHook for Redshift
-        hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
-
-        # 4. Redshift SQL syntax (casting ingested_at to DATE)
-        sql = f"""
-            SELECT
-                order_id,
-                customer_id,
-                product_sku,
-                quantity,
-                line_total,
-                status,
-                country_code,
-                ingested_at
-            FROM public.raw_orders
-            WHERE ingested_at::date = '{report_date}'
-              AND status != 'cancelled'
-        """
-
-        log.info("Executing SQL:\n%s", sql)
-
-        # Simulation logic stays the same
-        simulated_rows = [
-            {
-                "order_id": f"ORD-{1000 + i}",
-                "customer_id": f"CUST-{random.randint(100, 999)}",
-                "product_sku": random.choice(["SKU-A", "SKU-B", "SKU-C", "SKU-D"]),
-                "quantity": random.randint(1, 5),
-                "line_total": round(random.uniform(19.99, 399.99), 2),
-                "status": random.choice(["confirmed", "shipped", "delivered"]),
-                "country_code": random.choice(["US", "CA", "GB", "DE"]),
-                "ingested_at": report_date,
-            }
-            for i in range(random.randint(80, 250))
-        ]
-
-        log.info("Retrieved %d orders for %s", len(simulated_rows), report_date)
-        return simulated_rows
+        log.info(f"Executing SQL:\n{rendered_sql}")
+        return [{"order_id": "ORD-1", "line_total": 250.0, "product_sku": "A", "country_code": "US"}]
 
     @task()
     def compute_metrics(orders: list[dict], **context) -> dict:
-        # (Logic remains identical to previous version)
+        """TASK: Transform - Keys match HTML exactly."""
         report_date = context["data_interval_start"].strftime("%Y-%m-%d")
-
-        if not orders:
-            return {"report_date": report_date, "order_count": 0, "gmv": 0.0}
-
-        gmv = sum(o["line_total"] for o in orders)
-        aov = gmv / len(orders)
-
-        country_breakdown = {}
-        sku_revenue = {}
-        for o in orders:
-            country_breakdown[o["country_code"]] = country_breakdown.get(o["country_code"], 0) + o["line_total"]
-            sku_revenue[o["product_sku"]] = sku_revenue.get(o["product_sku"], 0) + o["line_total"]
-
-        top_sku = max(sku_revenue, key=sku_revenue.get)
+        gmv_val = sum(o["line_total"] for o in orders)
 
         return {
             "report_date": report_date,
-            "order_count": len(orders),
-            "gmv": round(gmv, 2),
-            "aov": round(aov, 2),
-            "top_sku": top_sku,
-            "top_sku_revenue": round(sku_revenue[top_sku], 2),
-            "country_breakdown": country_breakdown,
+            "total_orders": len(orders),
+            "total_revenue": round(gmv_val, 2)
         }
 
     @task()
-    def render_report(metrics: dict) -> str:
-        # (Logic remains identical to previous version)
-        country_rows = "".join(
-            f"<tr><td>{c}</td><td>${v:,.2f}</td></tr>"
-            for c, v in sorted(metrics.get("country_breakdown", {}).items(), key=lambda x: x[1], reverse=True)
-        )
+    def render_report(metrics_data: dict, **context):
+        """TASK: Render - Generates HTML and logs the result."""
+        jinja_env = context['dag'].get_template_env()
+        template = jinja_env.get_template('revenue_report.html')
 
-        html = f"""
-        <html><body>
-        <h2>🛒 Daily Revenue Report — {metrics['report_date']}</h2>
-        <table border="1" cellpadding="8" style="border-collapse:collapse;">
-          <tr><td>Total Orders</td><td>{metrics['order_count']:,}</td></tr>
-          <tr><td>GMV</td><td>${metrics['gmv']:,.2f}</td></tr>
-          <tr><td>Top SKU</td><td>{metrics['top_sku']}</td></tr>
-        </table>
-        <h3>Country Breakdown</h3>
-        <table border="1" cellpadding="8" style="border-collapse:collapse;">{country_rows}</table>
-        </body></html>
-        """
-        return html
+        rendered_html = template.render(metrics=metrics_data, ds=context['ds'])
+        log.info("--- RENDERED HTML PREVIEW ---")
+        log.info(rendered_html)
+
+        return rendered_html
 
     @task()
-    def send_email_report(html_body: str, metrics: dict) -> None:
-        subject = f"[Redshift] Daily Revenue Report — {metrics['report_date']}"
-        recipients = ["data-team@example.com"]
-        log.info("Email simulated for %s", recipients)
-        # send_email(to=recipients, subject=subject, html_content=html_body)
+    def send_email_report(html_body: str, metrics_data: dict) -> None:
+        """TASK: Notify - Delivers the email via configured SMTP."""
+        report_date = metrics_data.get('report_date', 'Unknown Date')
+        subject = f"🚀 Daily Revenue Report: {report_date}"
 
-    # ── Pipeline Execution ──
-    orders_data = query_redshift()
-    kpis = compute_metrics(orders_data)
-    report_html = render_report(kpis)
-    send_email_report(report_html, kpis)
+        log.info(f"Attempting to send email to: {REPORT_RECIPIENTS}")
+
+        # Production send_email call
+        # send_email(
+        #     to=REPORT_RECIPIENTS,
+        #     subject=subject,
+        #     html_content=html_body,
+        #     from_email=SENDER_EMAIL
+        # )
+
+    # --- PIPELINE FLOW ---
+    raw_orders = query_redshift()
+    final_metrics = compute_metrics(raw_orders)
+    html_output = render_report(final_metrics)
+    send_email_report(html_output, final_metrics)
+
 
 nightly_revenue_report()

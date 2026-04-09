@@ -1,0 +1,11 @@
+<html>
+<body>
+    <h2 style="color: #333;">Nightly Revenue Report</h2>
+    <p>Summary for: <strong>{{ ds }}</strong></p>
+    <ul>
+        <li>Total Orders: {{ metrics.total_orders }}</li>
+        <li>Total Revenue: ${{ "{:,.2f}".format(metrics.total_revenue) }}</li>
+    </ul>
+    <p>Status: <span style="color: green;">Success</span></p>
+</body>
+</html>
