@@ -60,7 +60,8 @@ def production_serial_etl():
             order["customer_id"] = f"***{order['customer_id'][-2:]}"
         return orders
 
-    @task(queue="etl-load-queue", outlets=[PROCESSED_ORDERS])   # <-- Astro feature: custom worker queue
+    # @task(queue="etl-load-queue", outlets=[PROCESSED_ORDERS])   # <-- Astro feature: custom worker queue
+    @task(outlets=[PROCESSED_ORDERS])
     def load_to_redshift(orders: list, **context):
         """
         TASK: Load
