@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import logging
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from airflow.sdk import dag, task, TaskGroup, Asset
 from include.assets.constants import ENRICHED_ORDERS
 
 log = logging.getLogger(__name__)
+
+# =============================================================================
+# DAG 2: Parallel Order Enrichment (Lab Requirement #2)
+# =============================================================================
+# Purpose: Demonstrates parallel execution with TaskGroup + fan-in
+# Shows how to enrich data in parallel before merging
 
 
 @dag(
@@ -18,6 +24,11 @@ log = logging.getLogger(__name__)
     tags=["parallel", "enrichment", "taskgroup", "asset"],
 )
 def parallel_order_enrichment():
+    """
+    Parallel DAG - 4 independent enrichment tasks run concurrently.
+    Uses TaskGroup for visual clarity in Graph View.
+    """
+
     @task()
     def fetch_raw_order() -> dict:
         """Simulates fetching a raw order from an e-commerce API."""
@@ -29,7 +40,6 @@ def parallel_order_enrichment():
             "amount": 150.0,
         }
 
-    # Fetch once → all enrichment tasks run in parallel
     raw_order_obj = fetch_raw_order()
 
     with TaskGroup(group_id="enrichment_tasks") as enrichment_group:
@@ -68,7 +78,7 @@ def parallel_order_enrichment():
         log.info(f"Successfully enriched order: {order['order_id']}")
         log.info(final_record)
 
-    # Final fan-in: waits for all 4 parallel enrichment tasks
+    # Final fan-in
     merge_and_publish(raw_order_obj, c_data, p_data, g_data, f_data)
 
 
