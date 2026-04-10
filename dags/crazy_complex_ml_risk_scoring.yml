@@ -1,0 +1,180 @@
+crazy_complex_ml_risk_scoring:
+  description: "INSANELY complex ML risk scoring DAG built with DAG Factory"
+  start_date: 2024-01-01
+  catchup: false
+  tags: ["crazy", "ml", "dag-factory", "complex", "astronomer"]
+  default_args:
+    owner: "sales_engineer_demo"
+  schedule:
+    - __type__: airflow.sdk.Asset
+      name: processed-orders
+
+  task_groups:
+    ingestion_layer:
+      tooltip: "Raw order ingestion"
+    user_features_group:
+      tooltip: "User-based features"
+      dependencies: [ingestion_layer]
+    tx_features_group:
+      tooltip: "Transaction features"
+      dependencies: [ ingestion_layer ]
+    device_features_group:
+      tooltip: "Device & IP features"
+      dependencies: [ingestion_layer]
+    ml_scoring_layer:
+      tooltip: "ML model + validation"
+      dependencies: [assemble_partial_vector, detect_anomalies]
+    redshift_load_layer:
+      tooltip: "Persistent storage"
+      dependencies: [ ml_scoring_layer ]
+    action_routing:
+      tooltip: "Parallel business actions"
+      dependencies: [redshift_load_layer]
+
+  tasks:
+    ingest_order_events:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.ingest_order_events
+      task_group_name: ingestion_layer
+
+    extract_user_data:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.extract_user_data
+      task_group_name: user_features_group
+      order: +ingest_order_events
+
+    compute_ltv:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.compute_ltv
+      task_group_name: user_features_group
+      u_feat: +extract_user_data
+
+    compute_churn_base:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.compute_churn_base
+      task_group_name: user_features_group
+      u_feat: +extract_user_data
+
+    extract_tx_data:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.extract_tx_data
+      task_group_name: tx_features_group
+      order: +ingest_order_events
+
+    compute_velocity:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.compute_velocity
+      task_group_name: tx_features_group
+      t_feat: +extract_tx_data
+
+    compute_basket:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.compute_basket
+      task_group_name: tx_features_group
+      t_feat: +extract_tx_data
+
+    compute_fraud_score_tx:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.compute_fraud_score_tx
+      task_group_name: tx_features_group
+      t_feat: +extract_tx_data
+
+    extract_device_data:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.extract_device_data
+      task_group_name: device_features_group
+      order: +ingest_order_events
+
+    compute_dev_age:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.compute_dev_age
+      task_group_name: device_features_group
+      d_feat: +extract_device_data
+
+    compute_ip_reputation:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.compute_ip_reputation
+      task_group_name: device_features_group
+      d_feat: +extract_device_data
+
+    enrich_geo:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.enrich_geo
+      order: +ingest_order_events
+
+    normalize_features:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.normalize_features
+      dependencies: [user_features_group, tx_features_group, device_features_group]
+
+    detect_anomalies:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.detect_anomalies
+      vector: +normalize_features
+      dependencies: [normalize_features]
+
+    assemble_partial_vector:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.assemble_partial_vector
+      ltv: +compute_ltv
+      churn: +compute_churn_base
+      velocity: +compute_velocity
+      basket: +compute_basket
+      ip_rep: +compute_ip_reputation
+      dev_age: +compute_dev_age
+      geo: +enrich_geo
+      dependencies: [user_features_group, tx_features_group, device_features_group]
+
+    score_with_model:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.score_with_model
+      task_group_name: ml_scoring_layer
+      vector: +assemble_partial_vector
+
+    validate_score:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.validate_score
+      task_group_name: ml_scoring_layer
+      scored: +score_with_model
+
+    load_scored_to_redshift:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.load_scored_to_redshift
+      task_group_name: redshift_load_layer
+      scored: +validate_score
+
+    action_approve:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.action_approve
+      task_group_name: action_routing
+      res: +load_scored_to_redshift
+      outlets:
+        - __type__: airflow.sdk.Asset
+          name: scored_orders
+
+    action_manual_review:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.action_manual_review
+      task_group_name: action_routing
+      res: +load_scored_to_redshift
+      outlets:
+        - __type__: airflow.sdk.Asset
+          name: scored_orders
+
+    action_block:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.action_block
+      task_group_name: action_routing
+      res: +load_scored_to_redshift
+      outlets:
+        - __type__: airflow.sdk.Asset
+          name: scored_orders
+
+    action_escalate:
+      decorator: airflow.sdk.task
+      python_callable: include.tasks.ml_risk_scoring_tasks.action_escalate
+      task_group_name: action_routing
+      res: +load_scored_to_redshift
+      outlets:
+        - __type__: airflow.sdk.Asset
+          name: scored_orders
