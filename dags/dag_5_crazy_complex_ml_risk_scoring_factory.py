@@ -2,11 +2,11 @@ import os
 from pathlib import Path
 from dagfactory import load_yaml_dags
 
-DEFAULT_CONFIG_ROOT_DIR = "/usr/local/airflow/dags/"
-CONFIG_ROOT_DIR = Path(os.getenv("CONFIG_ROOT_DIR", DEFAULT_CONFIG_ROOT_DIR))
-
-config_file = str(CONFIG_ROOT_DIR / "crazy_complex_ml_risk_scoring.yml")
-config_path = CONFIG_ROOT_DIR / "crazy_complex_ml_risk_scoring.yml"
+# Get the base directory dynamically
+airflow_home = os.getenv("AIRFLOW_HOME", "/usr/local/airflow")
+# Points to 'include/crazy_complex_ml_risk_scoring.yml'
+# (Assuming your YAML is in the include folder)
+config_path = Path(airflow_home) / "include" / "dagfactory_configs" / "crazy_complex_ml_risk_scoring.yml"
 
 if config_path.exists():
     load_yaml_dags(
@@ -14,4 +14,5 @@ if config_path.exists():
         config_filepath=str(config_path),
     )
 else:
-    print(f"Warning: Configuration file not found at {config_path}")
+    # This print will show up in the Airflow Scheduler logs on Astro
+    print(f"ERROR: Configuration file not found at {config_path}")
