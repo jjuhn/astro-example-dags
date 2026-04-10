@@ -4,7 +4,7 @@ import random
 from datetime import datetime
 from airflow.sdk import dag, task, TaskGroup
 from airflow.sdk.definitions.asset import Asset
-from assets.constants import PROCESSED_ORDERS, SCORED_ORDERS
+from include.assets.constants import PROCESSED_ORDERS, SCORED_ORDERS
 
 log = logging.getLogger(__name__)
 

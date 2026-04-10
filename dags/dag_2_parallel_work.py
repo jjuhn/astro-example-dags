@@ -5,8 +5,7 @@ import random
 from datetime import datetime, timedelta
 
 from airflow.sdk import dag, task, TaskGroup, Asset
-from assets.constants import ENRICHED_ORDERS
-
+from include.assets.constants import ENRICHED_ORDERS
 
 log = logging.getLogger(__name__)
 
@@ -16,11 +15,12 @@ log = logging.getLogger(__name__)
     schedule="@daily",
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=["parallel"],
+    tags=["parallel", "enrichment", "taskgroup", "asset"],
 )
 def parallel_order_enrichment():
     @task()
     def fetch_raw_order() -> dict:
+        """Simulates fetching a raw order from an e-commerce API."""
         return {
             "order_id": f"ORD-{random.randint(2000, 9999)}",
             "customer_id": f"CUST-{random.randint(100, 999)}",
@@ -29,7 +29,7 @@ def parallel_order_enrichment():
             "amount": 150.0,
         }
 
-    # We fetch the order here
+    # Fetch once → all enrichment tasks run in parallel
     raw_order_obj = fetch_raw_order()
 
     with TaskGroup(group_id="enrichment_tasks") as enrichment_group:
@@ -54,8 +54,12 @@ def parallel_order_enrichment():
         g_data = enrich_geo(raw_order_obj)
         f_data = check_fraud_flag(raw_order_obj)
 
-    @task(outlets=[ENRICHED_ORDERS])  # Tell Airflow this task updates the asset
+    @task(queue="enrichment-queue", outlets=[ENRICHED_ORDERS])   # <-- Astro feature: custom worker queue
     def merge_and_publish(order: dict, customer: dict, product: dict, geo: dict, fraud: dict) -> None:
+        """
+        Fan-in task: merges all parallel enrichments and publishes the final enriched order.
+        Runs on a dedicated worker queue (configured in Astro Deployment settings).
+        """
         final_record = {
             "order_id": order["order_id"],
             "enrichment": {"customer": customer, "product": product, "geo": geo, "fraud": fraud}
@@ -63,7 +67,7 @@ def parallel_order_enrichment():
         log.info(f"Successfully enriched order: {order['order_id']}")
         log.info(final_record)
 
-    # Final Fan-in: merge_and_publish will wait for all upstream tasks to finish
+    # Final fan-in: waits for all 4 parallel enrichment tasks
     merge_and_publish(raw_order_obj, c_data, p_data, g_data, f_data)
 
 

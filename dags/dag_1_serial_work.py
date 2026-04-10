@@ -7,18 +7,20 @@ from datetime import datetime, timedelta
 
 from airflow.sdk import dag, task, Asset
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.models import Variable
-from assets.constants import ENRICHED_ORDERS, PROCESSED_ORDERS
+from include.assets.constants import ENRICHED_ORDERS, PROCESSED_ORDERS
 
 log = logging.getLogger(__name__)
 
 # --- 1. DYNAMIC PATH DISCOVERY ---
-# This eliminates the /usr/local/airflow hardcoding
-DAG_DIR = os.path.dirname(os.path.abspath(__file__))
-SQL_DIR = os.path.join(DAG_DIR, 'sqls')
+include_path = "/usr/local/airflow/include"
+SQL_DIR = os.path.join(include_path, 'sqls')
+TEMPLATES_DIR = os.path.join(include_path, 'templates')
 
 # --- 2. CONFIGURATION ---
-REDSHIFT_CONN = Variable.get("redshift_conn", default_var="redshift_default")
+# Now using a SHARED Airflow Connection created in the Astronomer UI
+# (Admin → Connections → Create: conn_id = redshift_default, Type = Postgres, Host/Port/etc for Redshift)
+REDSHIFT_CONN_ID = "redshift_default"
+
 TARGET_TABLE = "public.raw_orders"
 
 
@@ -27,9 +29,8 @@ TARGET_TABLE = "public.raw_orders"
     schedule=[ENRICHED_ORDERS],
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    # 3. Use the dynamic path here
     template_searchpath=[SQL_DIR],
-    tags=["serial"]
+    tags=["serial", "redshift", "etl"],
 )
 def production_serial_etl():
 
@@ -59,11 +60,12 @@ def production_serial_etl():
             order["customer_id"] = f"***{order['customer_id'][-2:]}"
         return orders
 
-    @task(outlets=[PROCESSED_ORDERS])
+    @task(queue="etl-load-queue", outlets=[PROCESSED_ORDERS])   # <-- Astro feature: custom worker queue
     def load_to_redshift(orders: list, **context):
         """
         TASK: Load
-        Renders the upsert SQL from the /sqls folder and logs it.
+        - Uses the SHARED Redshift connection created in Astronomer UI
+        - Renders the upsert SQL from the /sqls folder
         """
         # 4. Use the DAG's environment to find the template
         jinja_env = context['dag'].get_template_env()
@@ -79,10 +81,11 @@ def production_serial_etl():
         log.info(rendered_sql)
         log.info("--- END PREVIEW ---")
 
-        # hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN)
+        # Execute using the shared Astronomer-managed connection
+        hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
         # hook.run(rendered_sql)
 
-    # Dependencies
+    # Dependencies (serial flow)
     processed_orders = transform_orders(validate_schema(extract_orders()))
     load_to_redshift(processed_orders)
 
