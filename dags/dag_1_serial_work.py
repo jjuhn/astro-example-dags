@@ -82,7 +82,7 @@ def production_serial_etl():
         log.info("--- END PREVIEW ---")
 
         # Execute using the shared Astronomer-managed connection
-        hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
+        # hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
         # hook.run(rendered_sql)
 
     # Dependencies (serial flow)
