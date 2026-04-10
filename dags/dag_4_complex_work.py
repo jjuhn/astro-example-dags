@@ -59,7 +59,7 @@ def order_risk_scoring():
     def assemble_vector(ltv, churn, velocity, basket, ip_rep, dev_age):
         return {"vector": [0.1, 0.2]}
 
-    @task(queue="ml-workers")
+    # @task(queue="ml-workers")
     def score_with_model(vector: dict):
         score = random.uniform(0, 1)
         tier = "approve" if score < 0.3 else "review" if score < 0.7 else "block"

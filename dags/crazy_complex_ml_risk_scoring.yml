@@ -130,6 +130,7 @@ crazy_complex_ml_risk_scoring:
       python_callable: include.tasks.ml_risk_scoring_tasks.score_with_model
       task_group_name: ml_scoring_layer
       vector: +assemble_partial_vector
+      queue: "high_mem_queue"
 
     validate_score:
       decorator: airflow.sdk.task
