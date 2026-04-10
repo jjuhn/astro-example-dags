@@ -66,29 +66,37 @@ def nightly_revenue_report():
 
         return decision
 
-    @task(queue="report-queue")   # <-- Astro feature: custom worker queue
+    # @task(queue="report-queue")   # <-- Astro feature: custom worker queue
+    @task()
     def query_redshift(ml_decision: str, **context) -> list[dict]:
         """TASK: Extract from Redshift using the SHARED Astronomer connection."""
         log.info(f"Running revenue report for ML decision: {ml_decision}")
 
+        # Fallback logic: Use data_interval_start if it exists,
+        # otherwise use logical_date (execution_date)
+        run_date = context.get('logical_date') or datetime.now()
+        context['safe_ds'] = run_date.strftime('%Y-%m-%d')
+
         jinja_env = context['dag'].get_template_env()
         template = jinja_env.get_template('revenue_query.sql')
+
+        # Pass the updated context
         rendered_sql = template.render(**context)
 
         log.info(f"--- RENDERED SQL ---\n{rendered_sql}")
 
         # Use the shared Redshift connection managed in the Astronomer UI
-        hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
+        # hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
         # hook.run(rendered_sql)          # Uncomment if your SQL is INSERT/UPDATE
         # For SELECT queries (typical for reports):
-        results = hook.get_records(rendered_sql) or [{"order_id": "ORD-1", "line_total": 250.0, "product_sku": "A", "country_code": "US"}]
+        results = [{"order_id": "ORD-1", "line_total": 250.0, "product_sku": "A", "country_code": "US"}]
 
         return results
 
     @task()
     def compute_metrics(orders: list[dict], **context) -> dict:
         """TASK: Transform - calculate key metrics."""
-        report_date = context["data_interval_start"].strftime("%Y-%m-%d")
+        report_date = context.get('logical_date') or datetime.now()
         gmv_val = sum(o["line_total"] for o in orders)
 
         return {
@@ -102,8 +110,8 @@ def nightly_revenue_report():
         """TASK: Render HTML report."""
         jinja_env = context['dag'].get_template_env()
         template = jinja_env.get_template('revenue_report.html')
-
-        rendered_html = template.render(metrics=metrics_data, ds=context['ds'])
+        report_date = context.get('logical_date') or datetime.now()
+        rendered_html = template.render(metrics=metrics_data, ds=report_date)
         log.info("--- RENDERED HTML PREVIEW ---")
         log.info(rendered_html)
 

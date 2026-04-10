@@ -54,7 +54,8 @@ def parallel_order_enrichment():
         g_data = enrich_geo(raw_order_obj)
         f_data = check_fraud_flag(raw_order_obj)
 
-    @task(queue="enrichment-queue", outlets=[ENRICHED_ORDERS])   # <-- Astro feature: custom worker queue
+    # @task(queue="enrichment-queue", outlets=[ENRICHED_ORDERS])   # <-- Astro feature: custom worker queue
+    @task(outlets=[ENRICHED_ORDERS])
     def merge_and_publish(order: dict, customer: dict, product: dict, geo: dict, fraud: dict) -> None:
         """
         Fan-in task: merges all parallel enrichments and publishes the final enriched order.

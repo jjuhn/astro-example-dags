@@ -11,5 +11,5 @@ SELECT
     country_code,
     ingested_at
 FROM public.raw_orders
-WHERE ingested_at::date = '{{ data_interval_start | ds }}'
-  AND status != 'cancelled'
+WHERE ingested_at::date = '{{ safe_ds }}'
+  AND status != 'cancelled';
