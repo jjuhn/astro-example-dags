@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import os
-import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from airflow.sdk import dag, task, Asset
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -11,17 +10,12 @@ from include.assets.constants import ENRICHED_ORDERS, PROCESSED_ORDERS
 
 log = logging.getLogger(__name__)
 
-# --- 1. DYNAMIC PATH DISCOVERY ---
-include_path = "/usr/local/airflow/include"
-SQL_DIR = os.path.join(include_path, 'sqls')
-TEMPLATES_DIR = os.path.join(include_path, 'templates')
-
-# --- 2. CONFIGURATION ---
-# Now using a SHARED Airflow Connection created in the Astronomer UI
-# (Admin → Connections → Create: conn_id = redshift_default, Type = Postgres, Host/Port/etc for Redshift)
-REDSHIFT_CONN_ID = "redshift_default"
-
-TARGET_TABLE = "public.raw_orders"
+# =============================================================================
+# DAG 1: Serial Order ETL → Redshift (Lab Requirement #1)
+# =============================================================================
+# Purpose: Classic serial pipeline (extract → validate → transform → load)
+# Uses shared Astronomer connection "redshift_default"
+# Triggers on ENRICHED_ORDERS Asset (data lineage demo)
 
 
 @dag(
@@ -29,10 +23,14 @@ TARGET_TABLE = "public.raw_orders"
     schedule=[ENRICHED_ORDERS],
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    template_searchpath=[SQL_DIR],
-    tags=["serial", "redshift", "etl"],
+    template_searchpath=["/usr/local/airflow/include/sqls"],
+    tags=["serial", "redshift", "etl", "shared-connection"],
 )
 def production_serial_etl():
+    """
+    Serial DAG - 4 tasks in strict sequence.
+    Demonstrates classic ETL pattern with Airflow TaskFlow API + shared connection.
+    """
 
     @task
     def extract_orders():
@@ -64,16 +62,14 @@ def production_serial_etl():
     @task(outlets=[PROCESSED_ORDERS])
     def load_to_redshift(orders: list, **context):
         """
-        TASK: Load
-        - Uses the SHARED Redshift connection created in Astronomer UI
-        - Renders the upsert SQL from the /sqls folder
+        Load task using shared Redshift connection (created in Astronomer UI).
+        Uses Jinja template from include/sqls/upsert_orders.sql
         """
-        # 4. Use the DAG's environment to find the template
         jinja_env = context['dag'].get_template_env()
         template = jinja_env.get_template("upsert_orders.sql")
 
         rendered_sql = template.render(
-            target_table=TARGET_TABLE,
+            target_table="public.raw_orders",
             orders=orders,
             **context
         )
@@ -83,11 +79,12 @@ def production_serial_etl():
         log.info("--- END PREVIEW ---")
 
         # Execute using the shared Astronomer-managed connection
-        # hook = PostgresHook(postgres_conn_id=REDSHIFT_CONN_ID)
+        # hook = PostgresHook(postgres_conn_id="redshift_default")
         # hook.run(rendered_sql)
 
-    # Dependencies (serial flow)
+    # Serial dependencies
     processed_orders = transform_orders(validate_schema(extract_orders()))
     load_to_redshift(processed_orders)
+
 
 production_serial_etl()
